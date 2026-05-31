@@ -1,4 +1,4 @@
-\# HybridRAG: Customer Complaint Intelligence Platform
+# HybridRAG: Customer Complaint Intelligence Platform
 
 
 
