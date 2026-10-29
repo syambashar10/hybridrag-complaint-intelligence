@@ -1,67 +1,65 @@
+from __future__ import annotations
+
 import pandas as pd
-from pathlib import Path
 
-DATA_PATH = Path("data/raw/complaints.csv")
+try:
+    from .config import RAW_DATA_PATH
+except ImportError:
+    from config import RAW_DATA_PATH
 
-def main():
-    if not DATA_PATH.exists():
-        print(f"File not found: {DATA_PATH}")
-        print("Make sure your dataset is named complaints.csv and placed inside data/raw/")
-        return
+SAMPLE_ROWS = 5_000
+TEXT_COL_CANDIDATES = [
+    "Consumer complaint narrative",
+    "consumer_complaint_narrative",
+    "narrative",
+    "complaint_narrative",
+]
 
-    print("Loading dataset...")
-    df = pd.read_csv(DATA_PATH, nrows=5000, low_memory=False)
 
-    print("\n=== Dataset Shape ===")
+def main() -> None:
+    if not RAW_DATA_PATH.exists():
+        raise SystemExit(
+            f"File not found: {RAW_DATA_PATH}\n"
+            "Download the CFPB complaints CSV and place it at data/raw/complaints.csv."
+        )
+
+    print(f"Loading first {SAMPLE_ROWS:,} rows from {RAW_DATA_PATH}...")
+    df = pd.read_csv(RAW_DATA_PATH, nrows=SAMPLE_ROWS, low_memory=False)
+
+    print("\n=== Sample Shape ===")
     print(df.shape)
-
     print("\n=== Columns ===")
-    for col in df.columns:
-        print("-", col)
+    for column in df.columns:
+        print("-", column)
 
     print("\n=== Missing Values: Top 20 ===")
-    print(df.isnull().sum().sort_values(ascending=False).head(20))
+    print(df.isna().sum().sort_values(ascending=False).head(20))
 
-    print("\n=== First 3 Rows ===")
-    print(df.head(3))
-
-    possible_text_cols = [
-        "Consumer complaint narrative",
-        "consumer_complaint_narrative",
-        "narrative",
-        "complaint_narrative"
-    ]
-
-    text_col = None
-    for col in possible_text_cols:
-        if col in df.columns:
-            text_col = col
-            break
-
-    if text_col:
-        print(f"\n=== Narrative Column Found: {text_col} ===")
-        print("Rows with complaint text:", df[text_col].notna().sum())
-
-        sample_text = df[text_col].dropna().iloc[0]
-        print("\n=== Sample Complaint Text ===")
-        print(sample_text[:1000])
+    text_col = next((c for c in TEXT_COL_CANDIDATES if c in df.columns), None)
+    if text_col is None:
+        print("\nNo recognized complaint narrative column was found.")
     else:
-        print("\nNo obvious complaint narrative column found.")
+        narratives = df[text_col].dropna().astype(str)
+        print(f"\n=== Narrative Column: {text_col} ===")
+        print(f"Rows with complaint text: {len(narratives):,}")
+        if not narratives.empty:
+            print("\n=== Sample Complaint ===")
+            print(narratives.iloc[0][:1_000])
 
-    likely_label_cols = [
+    useful = [
         "Product",
         "Issue",
         "Sub-product",
         "Sub-issue",
         "Company response to consumer",
-        "Timely response?"
+        "Timely response?",
     ]
+    print("\n=== Useful Label Columns ===")
+    for column in useful:
+        if column in df.columns:
+            print(f"\n{column}:")
+            print(df[column].value_counts(dropna=False).head(10))
 
-    print("\n=== Useful Label Columns Found ===")
-    for col in likely_label_cols:
-        if col in df.columns:
-            print(f"\n{col}:")
-            print(df[col].value_counts(dropna=False).head(10))
 
 if __name__ == "__main__":
     main()
