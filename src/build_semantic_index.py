@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import faiss
@@ -6,69 +10,89 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
+try:
+    from .config import (
+        EMBEDDING_MODEL,
+        EMBEDDINGS_PATH,
+        FAISS_INDEX_PATH,
+        INDEX_DIR,
+        INDEX_METADATA_PATH,
+        PROCESSED_DATA_PATH,
+    )
+except ImportError:
+    from config import (
+        EMBEDDING_MODEL,
+        EMBEDDINGS_PATH,
+        FAISS_INDEX_PATH,
+        INDEX_DIR,
+        INDEX_METADATA_PATH,
+        PROCESSED_DATA_PATH,
+    )
 
-DATA_PATH = Path("data/processed/complaints_clean.csv")
-INDEX_DIR = Path("data/indexes")
 
-FAISS_INDEX_PATH = INDEX_DIR / "complaints_faiss.index"
-EMBEDDINGS_PATH = INDEX_DIR / "complaints_embeddings.npy"
-METADATA_PATH = INDEX_DIR / "complaints_metadata.json"
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
-MODEL_NAME = "all-MiniLM-L6-v2"
 
+def build_index(data_path: Path = PROCESSED_DATA_PATH) -> dict:
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Processed dataset not found: {data_path}. Run prepare_dataset.py first."
+        )
 
-def main():
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(data_path)
+    if "clean_text" not in df.columns:
+        raise ValueError("clean_text column not found in processed dataset.")
+    texts = df["clean_text"].fillna("").astype(str).tolist()
+    if not texts:
+        raise ValueError("Processed dataset is empty.")
 
-    print("Loading clean dataset...")
-    df = pd.read_csv(DATA_PATH)
-    df["clean_text"] = df["clean_text"].fillna("")
-
-    print(f"Loaded {len(df)} complaints.")
-
-    print(f"Loading embedding model: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
-
-    print("Creating embeddings...")
+    print(f"Loading embedding model: {EMBEDDING_MODEL}")
+    model = SentenceTransformer(EMBEDDING_MODEL)
+    print(f"Embedding {len(texts):,} complaints...")
     embeddings = model.encode(
-        df["clean_text"].tolist(),
+        texts,
         batch_size=64,
         show_progress_bar=True,
         convert_to_numpy=True,
         normalize_embeddings=True,
-    )
+    ).astype("float32")
 
-    embeddings = embeddings.astype("float32")
-
-    print("Building FAISS index...")
-    dimension = embeddings.shape[1]
+    dimension = int(embeddings.shape[1])
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
-    print("Saving FAISS index...")
     faiss.write_index(index, str(FAISS_INDEX_PATH))
-
-    print("Saving embeddings...")
     np.save(EMBEDDINGS_PATH, embeddings)
 
     metadata = {
-        "model_name": MODEL_NAME,
+        "model_name": EMBEDDING_MODEL,
         "num_vectors": int(index.ntotal),
-        "embedding_dimension": int(dimension),
-        "data_path": str(DATA_PATH),
-        "faiss_index_path": str(FAISS_INDEX_PATH),
-        "embeddings_path": str(EMBEDDINGS_PATH),
+        "embedding_dimension": dimension,
+        "index_type": "IndexFlatIP",
+        "normalized_embeddings": True,
+        "data_path": str(data_path),
+        "dataset_sha256": sha256_file(data_path),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    INDEX_METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-    with open(METADATA_PATH, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
+    print(f"Saved FAISS index: {FAISS_INDEX_PATH}")
+    print(f"Saved embeddings: {EMBEDDINGS_PATH}")
+    print(f"Saved metadata: {INDEX_METADATA_PATH}")
+    return metadata
 
-    print("\nDone.")
-    print(f"FAISS index saved to: {FAISS_INDEX_PATH}")
-    print(f"Embeddings saved to: {EMBEDDINGS_PATH}")
-    print(f"Metadata saved to: {METADATA_PATH}")
-    print(f"Vectors: {index.ntotal}")
-    print(f"Dimension: {dimension}")
+
+def main() -> None:
+    try:
+        build_index()
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":
